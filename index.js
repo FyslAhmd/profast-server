@@ -1,4 +1,5 @@
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
@@ -8,6 +9,11 @@ const PORT = process.env.PORT || 5000;
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const serviceAccount = require("./firebase-admin-sdk.json");
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mo9z4qj.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -22,16 +28,34 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     await client.connect();
-    const parcelsCollection = client.db("parcelService").collection("parcels");
-    const paymentCollection = client
-      .db("parcelService")
-      .collection("paymentHistory");
-    const trackingCollection = client
-      .db("parcelService")
-      .collection("trackingCollection");
+    const db = client.db("parcelService");
+    const parcelsCollection = db.collection("parcels");
+    const paymentCollection = db.collection("paymentHistory");
+    const trackingCollection = db.collection("trackingCollection");
+    const userCollection = db.collection("users");
+
+    //custom middlewire
+    const verifyFirebaseToken = async (req, res, next) => {
+      const headers = req.headers.authorization;
+      if (!headers) {
+        return res.status(401).send({ message: "Unauthorized" });
+      }
+      const token = headers.split(" ")[1];
+      if (!token) {
+        return res.status(401).send({ message: "Unauthorized" });
+      }
+      //verify token
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+      } catch (err) {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
+    };
 
     //get all parcel or user parcel by email
-    app.get("/parcels", async (req, res) => {
+    app.get("/parcels", verifyFirebaseToken, async (req, res) => {
       const { email } = req.query;
 
       try {
@@ -54,7 +78,7 @@ async function run() {
     });
 
     //get parcel by id
-    app.get("/parcels/:id", async (req, res) => {
+    app.get("/parcels/:id", verifyFirebaseToken, async (req, res) => {
       try {
         const { id } = req.params;
         const query = { _id: new ObjectId(id) };
@@ -67,15 +91,34 @@ async function run() {
     });
 
     //get payment history
-    app.get("/payments", async (req, res) => {
+    app.get("/payments", verifyFirebaseToken, async (req, res) => {
       const { email } = req.query;
       let query = email ? { email: email } : {};
+
+      if (req.decoded.email !== email) {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
 
       const paymentHistory = await paymentCollection
         .find(query)
         .sort({ paid_at: -1 })
         .toArray();
       res.status(200).send(paymentHistory);
+    });
+
+    //add user data
+    app.post("/users", async (req, res) => {
+      const email = req.body.email;
+      const isUserExist = await userCollection.findOne({ email });
+      if (isUserExist) {
+        return res
+          .status(200)
+          .send({ message: "User already exists", inserted: false });
+      }
+
+      const user = req.body;
+      const result = await userCollection.insertOne(user);
+      res.send(result);
     });
 
     //post parcel from user
