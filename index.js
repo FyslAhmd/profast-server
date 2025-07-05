@@ -33,6 +33,7 @@ async function run() {
     const paymentCollection = db.collection("paymentHistory");
     const trackingCollection = db.collection("trackingCollection");
     const userCollection = db.collection("users");
+    const ridersCollection = db.collection("riders");
 
     //custom middlewire
     const verifyFirebaseToken = async (req, res, next) => {
@@ -104,6 +105,27 @@ async function run() {
         .sort({ paid_at: -1 })
         .toArray();
       res.status(200).send(paymentHistory);
+    });
+
+    //get riders pendig status
+    app.get("/riders/pending", async (req, res) => {
+      try {
+        const pendingRiders = await ridersCollection
+          .find({ status: "pending" })
+          .toArray();
+        res.status(200).send(pendingRiders);
+      } catch (error) {
+        res
+          .status(500)
+          .send({ message: "Failed to load pending riders", error });
+      }
+    });
+
+    // GET riders active status and search function
+    app.get("/riders/active", async (req, res) => {
+      let query = { status: "active" };
+      const riders = await ridersCollection.find(query).toArray();
+      res.send(riders);
     });
 
     //add user data
@@ -192,6 +214,24 @@ async function run() {
 
       const insertResult = await trackingCollection.insertOne(newTracking);
       return res.status(500).json(insertResult);
+    });
+
+    //post rider info
+    app.post("/riders", async (req, res) => {
+      const rider = req.body;
+      const result = await ridersCollection.insertOne(rider);
+      res.status(200).send(result);
+    });
+
+    //update riders status
+    app.patch("/riders/:id/status", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const result = await ridersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status } }
+      );
+      res.send(result);
     });
 
     //delete parcel by its ID
