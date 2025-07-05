@@ -66,11 +66,6 @@ async function run() {
           .find(query)
           .sort({ creation_date: -1 })
           .toArray();
-
-        if (parcels.length === 0) {
-          return res.status(404).send({ message: "No parcels found." });
-        }
-
         res.status(200).send(parcels);
       } catch (error) {
         console.error("Error fetching parcels:", error);
@@ -128,6 +123,16 @@ async function run() {
       res.send(riders);
     });
 
+    // search user to give role
+    app.get("/users/search", async (req, res) => {
+      const { email } = req.query;
+      if (!email) return res.send([]);
+      const users = await userCollection
+        .find({ email: { $regex: email, $options: "i" } })
+        .toArray();
+      res.send(users);
+    });
+
     //add user data
     app.post("/users", async (req, res) => {
       const email = req.body.email;
@@ -141,6 +146,16 @@ async function run() {
       const user = req.body;
       const result = await userCollection.insertOne(user);
       res.send(result);
+    });
+
+    // GET user role to verify
+    app.get("/users/role", async (req, res) => {
+      const { email } = req.query;
+      const user = await userCollection.findOne({ email });
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      res.send({ role: user.role });
     });
 
     //post parcel from user
@@ -226,10 +241,30 @@ async function run() {
     //update riders status
     app.patch("/riders/:id/status", async (req, res) => {
       const id = req.params.id;
-      const { status } = req.body;
+      const { status, email } = req.body;
+
+      if (status === "active") {
+        const userQuery = { email };
+        const userDoc = {
+          $set: { role: "rider" },
+        };
+        const roleResult = await userCollection.updateOne(userQuery, userDoc);
+        console.log(roleResult);
+      }
       const result = await ridersCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: { status } }
+      );
+      res.send(result);
+    });
+
+    // update user role to make or remove admin
+    app.patch("/users/:id/role", async (req, res) => {
+      const { role } = req.body;
+      const id = req.params.id;
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role } }
       );
       res.send(result);
     });
