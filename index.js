@@ -55,6 +55,22 @@ async function run() {
       }
     };
 
+    //verify admin only route
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      next();
+    };
+
+    //verify id
+    function isValidObjectId(id) {
+      return /^[0-9a-fA-F]{24}$/.test(id);
+    }
+
     //get all parcel or user parcel by email
     app.get("/parcels", verifyFirebaseToken, async (req, res) => {
       const { email } = req.query;
@@ -77,6 +93,10 @@ async function run() {
     app.get("/parcels/:id", verifyFirebaseToken, async (req, res) => {
       try {
         const { id } = req.params;
+        // console.log(id);
+        if (!isValidObjectId(id)) {
+          return res.status(400).send({ message: "Invalid ID format" });
+        }
         const query = { _id: new ObjectId(id) };
         const result = await parcelsCollection.findOne(query);
         res.status(200).send(result);
@@ -90,7 +110,6 @@ async function run() {
     app.get("/payments", verifyFirebaseToken, async (req, res) => {
       const { email } = req.query;
       let query = email ? { email: email } : {};
-
       if (req.decoded.email !== email) {
         return res.status(403).send({ message: "Forbidden access" });
       }
@@ -103,25 +122,59 @@ async function run() {
     });
 
     //get riders pendig status
-    app.get("/riders/pending", async (req, res) => {
-      try {
-        const pendingRiders = await ridersCollection
-          .find({ status: "pending" })
-          .toArray();
-        res.status(200).send(pendingRiders);
-      } catch (error) {
-        res
-          .status(500)
-          .send({ message: "Failed to load pending riders", error });
+    app.get(
+      "/riders/pending",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const pendingRiders = await ridersCollection
+            .find({ status: "pending" })
+            .toArray();
+          res.status(200).send(pendingRiders);
+        } catch (error) {
+          res
+            .status(500)
+            .send({ message: "Failed to load pending riders", error });
+        }
       }
-    });
+    );
 
     // GET riders active status and search function
-    app.get("/riders/active", async (req, res) => {
-      let query = { status: "active" };
-      const riders = await ridersCollection.find(query).toArray();
-      res.send(riders);
-    });
+    app.get(
+      "/riders/active",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        let query = { status: "active" };
+        const riders = await ridersCollection.find(query).toArray();
+        res.send(riders);
+      }
+    );
+
+    // Get active riders for a specific district
+    app.get(
+      "/riders/activeRiders",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { district } = req.query;
+        try {
+          const query = {
+            status: "active",
+            work_status: { $ne: "in_delivary" }, // Exclude those already delivering
+          };
+          if (district) query.rider_district = district;
+
+          const riders = await ridersCollection.find(query).toArray();
+          res.status(200).send(riders);
+        } catch (err) {
+          res
+            .status(500)
+            .send({ message: "Error loading active riders", error: err });
+        }
+      }
+    );
 
     // search user to give role
     app.get("/users/search", async (req, res) => {
@@ -132,6 +185,27 @@ async function run() {
         .toArray();
       res.send(users);
     });
+
+    //get assignable parcels
+    app.get(
+      "/parcel/assignable",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const parcels = await parcelsCollection
+            .find({ payment_status: "paid", delivary_status: "not_collected" })
+            .sort({ creation_date: -1 })
+            .toArray();
+          res.status(200).send(parcels);
+        } catch (err) {
+          console.log("error in assign ", err);
+          res
+            .status(500)
+            .send({ message: "Error loading assignable parcels", error: err });
+        }
+      }
+    );
 
     //add user data
     app.post("/users", async (req, res) => {
@@ -149,8 +223,11 @@ async function run() {
     });
 
     // GET user role to verify
-    app.get("/users/role", async (req, res) => {
+    app.get("/users/role", verifyFirebaseToken, async (req, res) => {
       const { email } = req.query;
+      if (req.decoded.email !== email) {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
       const user = await userCollection.findOne({ email });
       if (!user) {
         return res.status(404).send({ message: "User not found" });
@@ -238,6 +315,29 @@ async function run() {
       res.status(200).send(result);
     });
 
+    // Assign rider to a parcel
+    app.post(
+      "/assign-rider",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { parcelId, riderId } = req.body;
+        if (!parcelId || !riderId)
+          return res.status(400).send({ message: "Missing data" });
+        await parcelsCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          { $set: { delivary_status: "in_transit", assigned_rider: riderId } }
+        );
+
+        await ridersCollection.updateOne(
+          { _id: new ObjectId(riderId) },
+          { $set: { work_status: "in_delivary" } }
+        );
+
+        res.status(200).send({ message: "Rider assigned successfully" });
+      }
+    );
+
     //update riders status
     app.patch("/riders/:id/status", async (req, res) => {
       const id = req.params.id;
@@ -249,7 +349,6 @@ async function run() {
           $set: { role: "rider" },
         };
         const roleResult = await userCollection.updateOne(userQuery, userDoc);
-        console.log(roleResult);
       }
       const result = await ridersCollection.updateOne(
         { _id: new ObjectId(id) },
@@ -272,7 +371,9 @@ async function run() {
     //delete parcel by its ID
     app.delete("/parcels/:id", async (req, res) => {
       const { id } = req.params;
-
+      if (!isValidObjectId(id)) {
+        return res.status(400).send({ message: "Invalid ID format" });
+      }
       try {
         query = { _id: new ObjectId(id) };
         const result = await parcelsCollection.deleteOne(query);
