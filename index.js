@@ -89,8 +89,28 @@ async function run() {
       }
     });
 
+    //get pending parcel details for riders
+    app.get(
+      "/parcels/pending-deliveries",
+      verifyFirebaseToken,
+      async (req, res) => {
+        const { riderEmail } = req.query;
+        if (!riderEmail) {
+          return res.status(400).send({ message: "Rider email required" });
+        }
+        const parcels = await parcelsCollection
+          .find({
+            delivary_status: "in_transit",
+            rider_email: riderEmail,
+          })
+          .sort({ creation_date: -1 })
+          .toArray();
+        res.status(200).send(parcels);
+      }
+    );
+
     //get parcel by id
-    app.get("/parcels/:id", verifyFirebaseToken, async (req, res) => {
+    app.get("/:id", verifyFirebaseToken, async (req, res) => {
       try {
         const { id } = req.params;
         // console.log(id);
@@ -107,9 +127,14 @@ async function run() {
     });
 
     //get payment history
-    app.get("/payments", verifyFirebaseToken, async (req, res) => {
+    app.get("/paymentsHistory", verifyFirebaseToken, async (req, res) => {
       const { email } = req.query;
+      console.log(email);
+      if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+      }
       let query = email ? { email: email } : {};
+      console.log(query);
       if (req.decoded.email !== email) {
         return res.status(403).send({ message: "Forbidden access" });
       }
@@ -162,7 +187,6 @@ async function run() {
         try {
           const query = {
             status: "active",
-            work_status: { $ne: "in_delivary" }, // Exclude those already delivering
           };
           if (district) query.rider_district = district;
 
@@ -321,12 +345,18 @@ async function run() {
       verifyFirebaseToken,
       verifyAdmin,
       async (req, res) => {
-        const { parcelId, riderId } = req.body;
-        if (!parcelId || !riderId)
+        const { parcelId, riderId, rider_email } = req.body;
+        if (!parcelId || !riderId || !rider_email)
           return res.status(400).send({ message: "Missing data" });
         await parcelsCollection.updateOne(
           { _id: new ObjectId(parcelId) },
-          { $set: { delivary_status: "in_transit", assigned_rider: riderId } }
+          {
+            $set: {
+              delivary_status: "in_transit",
+              assigned_rider: riderId,
+              rider_email: rider_email,
+            },
+          }
         );
 
         await ridersCollection.updateOne(
@@ -366,6 +396,26 @@ async function run() {
         { $set: { role } }
       );
       res.send(result);
+    });
+
+    // In your Express server
+    app.patch("/parcels/:id/delivered", async (req, res) => {
+      const { id } = req.params;
+      try {
+        const result = await parcelsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { delivary_status: "delivared" } }
+        );
+        if (result.modifiedCount > 0) {
+          res.send({ message: "Parcel marked as delivered" });
+        } else {
+          res.status(404).send({ message: "Parcel not found" });
+        }
+      } catch (error) {
+        res
+          .status(500)
+          .send({ message: "Failed to update delivery status", error });
+      }
     });
 
     //delete parcel by its ID
