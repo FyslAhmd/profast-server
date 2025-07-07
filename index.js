@@ -66,6 +66,17 @@ async function run() {
       next();
     };
 
+    //verify rider only route
+    const verifyRider = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "rider") {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      next();
+    };
+
     //verify id
     function isValidObjectId(id) {
       return /^[0-9a-fA-F]{24}$/.test(id);
@@ -93,6 +104,7 @@ async function run() {
     app.get(
       "/parcels/pending-deliveries",
       verifyFirebaseToken,
+      verifyRider,
       async (req, res) => {
         const { riderEmail } = req.query;
         if (!riderEmail) {
@@ -109,8 +121,29 @@ async function run() {
       }
     );
 
+    // Get completed deliveries for a rider
+    app.get(
+      "/parcels/completed-deliveries",
+      verifyFirebaseToken,
+      verifyRider,
+      async (req, res) => {
+        const { riderEmail } = req.query;
+        if (!riderEmail) {
+          return res.status(400).send({ message: "Rider email required" });
+        }
+        const parcels = await parcelsCollection
+          .find({
+            delivary_status: "delivared",
+            rider_email: riderEmail,
+          })
+          .sort({ creation_date: -1 })
+          .toArray();
+        res.status(200).send(parcels);
+      }
+    );
+
     //get parcel by id
-    app.get("/:id", verifyFirebaseToken, async (req, res) => {
+    app.get("/parcels/:id", verifyFirebaseToken, async (req, res) => {
       try {
         const { id } = req.params;
         // console.log(id);
@@ -398,7 +431,7 @@ async function run() {
       res.send(result);
     });
 
-    // In your Express server
+    // update delivary status when rider complete the delivary
     app.patch("/parcels/:id/delivered", async (req, res) => {
       const { id } = req.params;
       try {
@@ -417,6 +450,39 @@ async function run() {
           .send({ message: "Failed to update delivery status", error });
       }
     });
+
+    // update cashed out status when rider cashed out
+    app.patch(
+      "/parcels/:id/cashout",
+      verifyFirebaseToken,
+      verifyRider,
+      async (req, res) => {
+        const { id } = req.params;
+        const { income, rider_email } = req.body;
+
+        if (!income || !rider_email) {
+          return res
+            .status(400)
+            .send({ message: "Income and rider email required" });
+        }
+
+        try {
+          await parcelsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { rider_money: "cashed_out" } }
+          );
+          await ridersCollection.updateOne(
+            {
+              rider_email: rider_email,
+            },
+            { $inc: { total_earning: income } }
+          );
+          res.send({ message: "Cash out successful" });
+        } catch (err) {
+          res.status(500).send({ message: "Cash out failed", error: err });
+        }
+      }
+    );
 
     //delete parcel by its ID
     app.delete("/parcels/:id", async (req, res) => {
