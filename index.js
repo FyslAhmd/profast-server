@@ -332,11 +332,29 @@ async function run() {
       res.send({ role: user.role });
     });
 
+    // Public API for parcel tracking timeline
+    app.get("/track/:trackingId", async (req, res) => {
+      const { trackingId } = req.params;
+      const logs = await trackingCollection
+        .find({ tracking_id: trackingId })
+        .sort({ time: 1 })
+        .toArray();
+      res.send(logs);
+    });
+
     //post parcel from user
     app.post("/parcels", async (req, res) => {
       try {
         const newParcel = req.body;
         const result = await parcelsCollection.insertOne(newParcel);
+        await trackingCollection.insertOne({
+          tracking_id: newParcel.tracking_id,
+          parcel_id: result.insertedId,
+          status: "submitted",
+          message: "Parcel submitted by user.",
+          updated_by: newParcel.created_by,
+          time: new Date(),
+        });
         res.status(201).send(result);
       } catch (error) {
         console.error("Error inserting parcel:", error);
@@ -372,6 +390,21 @@ async function run() {
           },
         }
       );
+
+      //update time in tracking collection
+      const parcel = await parcelsCollection.findOne({
+        _id: new ObjectId(parcelId),
+      });
+      if (parcel) {
+        await trackingCollection.insertOne({
+          tracking_id: parcel.tracking_id,
+          parcel_id: parcelId,
+          status: "paid",
+          message: "Payment completed for the parcel.",
+          updated_by: email,
+          time: new Date(),
+        });
+      }
 
       const paymentHistoryEntry = {
         parcelId,
@@ -437,6 +470,21 @@ async function run() {
           { $set: { work_status: "in_delivary" } }
         );
 
+        //ADD THIS FOR TRACKING LOG
+        const parcel = await parcelsCollection.findOne({
+          _id: new ObjectId(parcelId),
+        });
+        if (parcel) {
+          await trackingCollection.insertOne({
+            tracking_id: parcel.tracking_id,
+            parcel_id: parcelId,
+            status: "rider_assigned",
+            message: `Rider assigned: ${rider_email}`,
+            updated_by: "admin",
+            time: new Date(),
+          });
+        }
+
         res.status(200).send({ message: "Rider assigned successfully" });
       }
     );
@@ -479,6 +527,22 @@ async function run() {
           { _id: new ObjectId(id) },
           { $set: { delivary_status: "delivared" } }
         );
+
+        //add timestamp in tracking collection
+        const parcel = await parcelsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (parcel) {
+          await trackingCollection.insertOne({
+            tracking_id: parcel.tracking_id,
+            parcel_id: id,
+            status: "delivered",
+            message: "Parcel delivered to receiver.",
+            updated_by: parcel.rider_email,
+            time: new Date(),
+          });
+        }
+
         if (result.modifiedCount > 0) {
           res.send({ message: "Parcel marked as delivered" });
         } else {
