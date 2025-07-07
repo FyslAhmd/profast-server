@@ -233,6 +233,46 @@ async function run() {
       }
     );
 
+    // GET rider's earnings by email
+    app.get(
+      "/riders/earnings",
+      verifyFirebaseToken,
+      verifyRider,
+      async (req, res) => {
+        const { email } = req.query;
+        if (!email) {
+          return res.status(400).send({ message: "Rider email required" });
+        }
+        const rider = await ridersCollection.findOne({ rider_email: email });
+        if (!rider) {
+          return res.status(404).send({ message: "Rider not found" });
+        }
+        res.send({ total_earning: rider.total_earning || 0 });
+      }
+    );
+
+    // (Optional) GET recent cashouts
+    app.get(
+      "/riders/earnings/history",
+      verifyFirebaseToken,
+      verifyRider,
+      async (req, res) => {
+        const { email } = req.query;
+        if (!email) {
+          return res.status(400).send({ message: "Rider email required" });
+        }
+        const parcels = await parcelsCollection
+          .find({
+            rider_email: email,
+            rider_money: "cashed_out",
+          })
+          .sort({ creation_date: -1 })
+          .limit(10)
+          .toArray();
+        res.send(parcels);
+      }
+    );
+
     // search user to give role
     app.get("/users/search", async (req, res) => {
       const { email } = req.query;
