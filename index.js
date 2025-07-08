@@ -83,7 +83,7 @@ async function run() {
     }
 
     //get all parcel or user parcel by email
-    app.get("/parcels", verifyFirebaseToken, async (req, res) => {
+    app.get("/parcels", async (req, res) => {
       const { email } = req.query;
 
       try {
@@ -300,6 +300,71 @@ async function run() {
           res
             .status(500)
             .send({ message: "Error loading assignable parcels", error: err });
+        }
+      }
+    );
+
+    // Get dashboard stats for admin
+    app.get(
+      "/admin/dashboard-stats",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const [
+            totalUsers,
+            totalParcels,
+            notCollected,
+            inTransit,
+            delivered,
+            pendingPayments,
+            activeRiders,
+            pendingRiders,
+          ] = await Promise.all([
+            userCollection.countDocuments(),
+            parcelsCollection.countDocuments(),
+            parcelsCollection.countDocuments({
+              delivary_status: "not_collected",
+            }),
+            parcelsCollection.countDocuments({ delivary_status: "in_transit" }),
+            parcelsCollection.countDocuments({ delivary_status: "delivared" }),
+            parcelsCollection.countDocuments({
+              payment_status: { $ne: "paid" },
+            }),
+            ridersCollection.countDocuments({ status: "active" }),
+            ridersCollection.countDocuments({ status: "pending" }),
+          ]);
+          res.json({
+            totalUsers,
+            totalParcels,
+            notCollected,
+            inTransit,
+            delivered,
+            pendingPayments,
+            activeRiders,
+            pendingRiders,
+          });
+        } catch (error) {
+          res.status(500).json({ message: "Stats fetch error", error });
+        }
+      }
+    );
+
+    // Get recent parcel activity for admin
+    app.get(
+      "/admin/recent-activity",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const parcels = await parcelsCollection
+            .find({})
+            .sort({ creation_date: -1 })
+            .limit(8)
+            .toArray();
+          res.json(parcels);
+        } catch (error) {
+          res.status(500).json({ message: "Activity fetch error", error });
         }
       }
     );
